@@ -4,6 +4,8 @@ import math
 import sys
 import msvcrt
 import datetime
+import zipfile
+import webbrowser
 from pathlib import Path
 from scanner import scan_directory
 
@@ -283,7 +285,8 @@ def editar_registro(conn, file_id):
         print("1. 📝 Agregar o Modificar Descripción")
         print("2. 🏷️  Agregar Etiquetas (Tags)")
         print("3. 🗑️  Borrar todas las Etiquetas")
-        print("4. 🔙 Volver a los resultados de búsqueda")
+        print("4. � Abrir archivo / Ir al enlace web")
+        print("5. �🔙 Volver a los resultados de búsqueda")
         
         opc = input("> ").strip()
         
@@ -335,6 +338,22 @@ def editar_registro(conn, file_id):
                 print("🗑️ Etiquetas eliminadas.")
                 
         elif opc == '4':
+            try:
+                if dict(archivo).get('resource_type') == 'web':
+                    print(f"🚀 Abriendo enlace web: {archivo['path']}")
+                    webbrowser.open(archivo['path'])
+                else:
+                    ruta_local = archivo['path']
+                    if os.path.exists(ruta_local):
+                        print(f"🚀 Abriendo archivo local: {ruta_local}")
+                        # os.startfile solo funciona en Windows, que es el sistema actual del usuario
+                        os.startfile(ruta_local)
+                    else:
+                        print(f"❌ Error: El archivo ya no existe en la ruta guardada ({ruta_local}).")
+            except Exception as e:
+                print(f"❌ Error al intentar abrir: {e}")
+                
+        elif opc == '5':
             break
 
 def procesar_carpeta_manual(conn):
@@ -433,7 +452,168 @@ def agregar_enlace_web(conn):
     if input("> ").strip().lower() == 's':
         editar_registro(conn, file_id)
 
+def exportar_importar_ia(conn):
+    print("\n" + "="*50)
+    print("🤖 EXPORTAR/IMPORTAR ETIQUETAS PARA IA EXTERNA")
+    print("="*50)
+    print("1. 📤 Exportar archivos SIN etiquetas a un .txt (Para darle a la IA)")
+    print("2. 📥 Ingerir respuestas de la IA (Formato: ID|tag1,tag2)")
+    print("3. 🔙 Volver al menú principal")
+    
+    opc = input("\nElige una opción (1-3): ").strip()
+    c = conn.cursor()
+    
+    if opc == '1':
+        c.execute("""
+            SELECT f.id, f.filename, f.path, f.resource_type, d.description 
+            FROM files f
+            LEFT JOIN descriptions d ON f.id = d.file_id
+            WHERE f.id NOT IN (SELECT file_id FROM metadata WHERE key='tag')
+        """)
+        registros = c.fetchall()
+        
+        if not registros:
+            print("\n✅ ¡Felicitaciones! No tienes ningún registro sin etiquetas en tu base de datos.")
+            return
+            
+        print(f"\nSe encontraron {len(registros)} registros en total sin etiquetas.")
+        limite = input("¿Cuántos quieres exportar en este lote? (Presiona ENTER para todos, o pon ej. 50): ").strip()
+        if limite.isdigit():
+            registros = registros[:int(limite)]
+            
+        archivo_export = "archivos_para_ia.txt"
+        try:
+            with open(archivo_export, "w", encoding="utf-8") as f:
+                f.write("INSTRUCCIONES PARA LA IA:\n")
+                f.write("Eres un categorizador de archivos y enlaces experto. A continuación te paso una lista de registros con su ID, Nombre, Tipo y Descripción (si la hay).\n")
+                f.write("Necesito que analices su nombre, ruta y descripción para inferir su contexto.\n")
+                f.write("Genera entre 2 a 4 etiquetas precisas, relevantes y cortas (en minúsculas) para cada registro.\n")
+                f.write("Tu respuesta debe ser ÚNICAMENTE el código ID, seguido de un pipe (|), y las etiquetas separadas por comas. No agregues nada más a tu respuesta, ni saludos.\n")
+                f.write("Ejemplo de tu formato de respuesta:\n12|factura, compras, 2026\n15|tutorial, python, programacion\n\n")
+                f.write("--- LISTA SECUENCIAL DE REGISTROS ---\n\n")
+                
+                for r in registros:
+                    desc = r['description'] if r['description'] else "(Sin descripción)"
+                    tipo = "Enlace Web" if r['resource_type'] == 'web' else "Archivo Local"
+                    f.write(f"ID: {r['id']}\nNombre: {r['filename']}\nTipo: {tipo}\nRuta: {r['path']}\nDesc: {desc}\n\n")
+                    
+            print(f"\n✅ EXPORTACIÓN EXITOSA. Archivo generado: '{archivo_export}'")
+            print("Paso 1: Abre ese archivo de texto.")
+            print("Paso 2: Copia todo su contenido y pégalo en tu IA favorita (Gemini, ChatGPT, Claude).")
+            print("Paso 3: Copia la respuesta que te dé la IA, guárdala en un archivo llamado 'respuestas.txt' y vuelve a la Opción 2 de este menú.")
+        except Exception as e:
+            print(f"❌ Error al escribir el archivo: {e}")
+            
+    elif opc == '2':
+        print("\n⚠️  Para que esto funcione bien, asegúrate de haber creado un archivo de texto")
+        print("con las respuestas puras de la IA, cada línea así: ID|etiqueta1,etiqueta2")
+        ruta_archivo = input("\nEscribe el nombre del archivo con las respuestas de la IA (ej. respuestas.txt): ").strip()
+        
+        if not os.path.exists(ruta_archivo):
+            print(f"\n❌ Error: No se encontró el archivo '{ruta_archivo}'. Asegúrate de que está en esta misma carpeta y escribiste la extensión (.txt).")
+            return
+            
+        try:
+            with open(ruta_archivo, "r", encoding="utf-8") as f:
+                lineas = f.readlines()
+                
+            agregadas = 0
+            for linea in lineas:
+                linea = linea.strip()
+                if not linea or '|' not in linea: continue
+                
+                partes = linea.split('|')
+                if len(partes) != 2: continue
+                
+                file_id_str = partes[0].strip()
+                tags_str = partes[1].strip()
+                
+                if not file_id_str.isdigit(): continue
+                file_id = int(file_id_str)
+                
+                # Normalizar tags (quitar asteriscos de markdown que a veces dejan las IAs)
+                tags_lista = [t.strip().lower().replace('*', '') for t in tags_str.split(',') if t.strip()]
+                
+                for t in tags_lista:
+                    # Validar longitud para evitar ruido
+                    if len(t) > 40: continue
+                    
+                    c.execute("SELECT 1 FROM metadata WHERE file_id=? AND key='tag' AND value=?", (file_id, t))
+                    if not c.fetchone():
+                        c.execute("INSERT INTO metadata (file_id, key, value) VALUES (?, 'tag', ?)", (file_id, t))
+                        agregadas += 1
+                        
+            conn.commit()
+            print(f"\n✅ ¡INYECCIÓN MASIVA FINALIZADA!")
+            print(f"Se inyectaron un total de {agregadas} etiquetas nuevas en la base de datos de manera automatizada.")
+            
+        except Exception as e:
+            print(f"\n❌ Error procesando el archivo de respuestas: {e}")
+
+def verificar_y_crear_respaldo():
+    backup_dir = os.path.join(os.path.dirname(__file__), "respaldos")
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    archivos_respaldo = [f for f in os.listdir(backup_dir) if f.endswith('.zip')]
+    
+    necesita_respaldo = False
+    if not archivos_respaldo:
+        necesita_respaldo = True
+        print("\n⚠️  No se ha encontrado ningún respaldo previo de la base de datos.")
+    else:
+        archivos_respaldo.sort(key=lambda f: os.path.getmtime(os.path.join(backup_dir, f)), reverse=True)
+        ultimo_respaldo = archivos_respaldo[0]
+        fecha_ultimo = datetime.datetime.fromtimestamp(os.path.getmtime(os.path.join(backup_dir, ultimo_respaldo)))
+        dias_pasados = (datetime.datetime.now() - fecha_ultimo).days
+        
+        if dias_pasados >= 7:
+            necesita_respaldo = True
+            print(f"\n⚠️  Han pasado {dias_pasados} días desde tu último respaldo ({fecha_ultimo.strftime('%Y-%m-%d')}). Se recomienda hacer uno nuevo periódicamente.")
+
+    if necesita_respaldo:
+        respaldar = input("¿Deseas crear una copia de seguridad comprimida de tu base de datos ahora? (s/n): ").strip().lower()
+        if respaldar == 's':
+            crear_respaldo_ahora()
+
+def crear_respaldo_ahora():
+    backup_dir = os.path.join(os.path.dirname(__file__), "respaldos")
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    fecha_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    nombre_zip = f"respaldo_bd_{fecha_str}.zip"
+    ruta_zip = os.path.join(backup_dir, nombre_zip)
+    
+    try:
+        temp_db = os.path.join(backup_dir, "temp_backup.db")
+        
+        # Conectar a la BD original y hacer un backup seguro (evita db lock)
+        conn = get_connection()
+        bck = sqlite3.connect(temp_db)
+        with bck:
+            conn.backup(bck)
+        bck.close()
+        conn.close()
+        
+        # Comprimir el archivo temporal
+        with zipfile.ZipFile(ruta_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(temp_db, "files.db")
+            
+        # Eliminar el archivo temporal
+        os.remove(temp_db)
+        
+        print("\n" + "="*65)
+        print("✅ RESPALDO CREADO EXITOSAMENTE")
+        print(f"📁 Ruta: {ruta_zip}")
+        print("☁️  ¡RECORDATORIO IMPORTANTE! ☁️")
+        print("Sube o copia este archivo .zip a tu cuenta en la nube (Google Drive,")
+        print("OneDrive, Mega, etc.) para asegurar tus datos ante fallas de disco.")
+        print("="*65 + "\n")
+        
+    except Exception as e:
+        print(f"\n❌ Error al crear el respaldo: {e}\n")
+
 def menu_principal():
+    verificar_y_crear_respaldo()
     while True:
         print("\n" + "="*50)
         print("🚀 GESTOR VISUAL DE BASE DE DATOS")
@@ -442,10 +622,12 @@ def menu_principal():
         print("2. 🔎 Buscar, Paginar y Editar Registros")
         print("3. 📂 Escanear y Etiquetar Carpeta Manualmente")
         print("4. 🌐 Guardar Nuevo Enlace Web (Nube/Internet)")
-        print("5. ❌ Salir")
+        print("5. 🤖 Exportar/Importar Lote para IA (Etiquetado Masivo)")
+        print("6. 💾 Crear Respaldo de Seguridad (Backup)")
+        print("7. ❌ Salir")
         print("="*50)
         
-        opcion = input("Selecciona una opción (1-5): ").strip()
+        opcion = input("Selecciona una opción (1-7): ").strip()
         
         if opcion == '1':
             mostrar_estadisticas()
@@ -460,10 +642,16 @@ def menu_principal():
             agregar_enlace_web(conn)
             conn.close()
         elif opcion == '5':
+            conn = get_connection()
+            exportar_importar_ia(conn)
+            conn.close()
+        elif opcion == '6':
+            crear_respaldo_ahora()
+        elif opcion == '7':
             print("¡Hasta luego! Cerrando gestor...")
             break
         else:
-            print("⚠️ Opción inválida. Intenta del 1 al 5.")
+            print("⚠️ Opción inválida. Intenta del 1 al 7.")
 
 if __name__ == "__main__":
     try:
