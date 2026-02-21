@@ -9,6 +9,7 @@ import webbrowser
 from pathlib import Path
 from scanner import scan_directory
 from gestor_apps import menu_apps
+from relaciones import init_relaciones, mostrar_relaciones, menu_relaciones
 
 # Forzar UTF-8 para que los emojis funcionen en cualquier terminal de Windows
 if sys.stdout.encoding != 'utf-8':
@@ -139,17 +140,17 @@ def explorar_archivos():
         print("\n" + "="*90)
         print(f"📄 RESULTADOS - Página {current_page}/{total_pages} ({start_idx+1} al {end_idx} de {total_records})")
         print("="*90)
-        print(f"{'Nº':<4} | {'Nombre del Archivo':<45} | {'Fecha':<12} | {'Info'}")
+        print(f"{'Nº':<4} | {'ID BD':<6} | {'Nombre del Archivo':<42} | {'Fecha':<12} | {'Info'}")
         print("-" * 90)
         
         for i, row in enumerate(page_results):
             global_idx = start_idx + i + 1
             fecha = row['modified_at'][:10] if row['modified_at'] else "N/A"
-            nombre = row['filename'][:42] + "..." if len(row['filename']) > 45 else row['filename']
+            nombre = row['filename'][:39] + "..." if len(row['filename']) > 42 else row['filename']
             c.execute("SELECT 1 FROM metadata WHERE file_id=? AND key='tag' LIMIT 1", (row['id'],))
             tiene_tags = c.fetchone() is not None
             estado = "[+]" if (row['description'] or tiene_tags) else "[ ]"
-            print(f"{global_idx:<4} | {nombre:<45} | {fecha:<12} | {estado}")
+            print(f"{global_idx:<4} | {row['id']:<6} | {nombre:<42} | {fecha:<12} | {estado}")
             
         print("-" * 90)
         print("\n[Número] Detalles | [O + Nº] Abrir | [S/A] Pág | [Q] Menú")
@@ -209,8 +210,9 @@ def editar_registro(conn, file_id):
         desc = desc_row['description'] if desc_row else "⚠️ (SIN DESCRIPCIÓN)"
         print(f"Descripción: {desc}")
         print(f"Etiquetas:   {', '.join(tags) if tags else '⚠️ (SIN ETIQUETAS)'}")
+        mostrar_relaciones(conn, "files", file_id)
         print("#"*70)
-        print("\n1. 📝 Editar Desc | 2. 🏷️ Agregar Tags | 3. 🗑️ Limpiar Tags | 4. 🚀 Abrir | 5. 🔙 Volver")
+        print("\n1. 📝 Editar Desc | 2. 🏷️ Agregar Tags | 3. 🗑️ Limpiar Tags | 4. 🚀 Abrir | 5. 🔗 Relaciones | 6. 🔙 Volver")
         opc = input("> ").strip()
         if opc == '1':
             nueva_desc = input("\nNueva descripción: ").strip()
@@ -234,7 +236,8 @@ def editar_registro(conn, file_id):
                 c.execute("DELETE FROM metadata WHERE file_id=? AND key='tag'", (file_id,))
                 conn.commit(); tags = []; print("🗑️ Limpio.")
         elif opc == '4': abrir_recurso(archivo)
-        elif opc == '5': break
+        elif opc == '5': menu_relaciones(conn, "files", file_id)
+        elif opc == '6': break
 
 def procesar_carpeta_manual(conn):
     ruta = input("\nRuta de la carpeta: ").strip()
@@ -305,6 +308,10 @@ def crear_respaldo_ahora():
 
 def menu_principal():
     verificar_y_crear_respaldo()
+    # Inicializar tabla de relaciones al arrancar
+    conn_init = get_connection()
+    init_relaciones(conn_init)
+    conn_init.close()
     while True:
         print("\n" + "="*50)
         print("🚀 GESTOR VISUAL DE BASE DE DATOS")

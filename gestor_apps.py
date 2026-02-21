@@ -3,6 +3,7 @@ import os
 import sys
 import webbrowser
 import datetime
+from relaciones import init_relaciones, mostrar_relaciones, menu_relaciones
 
 # Forzar UTF-8 para terminales Windows
 if sys.stdout.encoding != 'utf-8':
@@ -71,6 +72,8 @@ def init_tablas():
         )
     """)
     conn.commit()
+    # Inicializar tabla de relaciones compartida
+    init_relaciones(conn)
     conn.close()
 
 # ─────────────────────────────────────────────
@@ -130,11 +133,11 @@ def listar_apps(conn):
     rows = conn.execute(query, params).fetchall()
     if not rows: print("\n❌ No se encontraron apps."); return rows
     sep("=")
-    print(f"{'N.':<4} | {'Nombre':<25} | {'Plataforma':<10} | {'Categoría':<15} | {'Estado':<12} | {'Gratis'}")
+    print(f"{'N.':<4} | {'ID':<5} | {'Nombre':<23} | {'Plataforma':<10} | {'Categoría':<15} | {'Estado':<12} | {'Gratis'}")
     sep()
     for i, r in enumerate(rows, 1):
-        nom = r['nombre'][:23] + ".." if len(r['nombre']) > 25 else r['nombre']
-        print(f"{i:<4} | {nom:<25} | {r['plataforma']:<10} | {(r['categoria'] or ''):<15} | {r['estado']:<12} | {'Sí' if r['es_gratis'] else 'No'}")
+        nom = r['nombre'][:21] + ".." if len(r['nombre']) > 23 else r['nombre']
+        print(f"{i:<4} | {r['id']:<5} | {nom:<23} | {r['plataforma']:<10} | {(r['categoria'] or ''):<15} | {r['estado']:<12} | {'Sí' if r['es_gratis'] else 'No'}")
     sep(); print(f"Total: {len(rows)} apps")
     return rows
 
@@ -151,8 +154,9 @@ def ver_editar_app(conn, app_id):
         print(f"Link       : {r['link_tienda'] or '—'}")
         print(f"Tags       : {r['tags'] or '—'}")
         print(f"Notas      : {r['notas'] or '—'}")
+        mostrar_relaciones(conn, "apps", app_id)
         sep()
-        print("1. ✏️ Editar | 2. 🔗 Abrir link | 3. 🗑️ Eliminar | 4. 🔙 Volver")
+        print("1. ✏️ Editar | 2. 🔗 Abrir link | 3. 🗑️ Eliminar | 4. 🔗 Relaciones | 5. 🔙 Volver")
         opc = input("> ").strip()
         if opc == '1':
             updates = {}
@@ -176,7 +180,8 @@ def ver_editar_app(conn, app_id):
             if input(f"⚠️ ¿Eliminar '{r['nombre']}'? (s/n): ").lower() == 's':
                 conn.execute("DELETE FROM apps WHERE id = ?", (app_id,))
                 conn.commit(); print("🗑️ Eliminada."); break
-        elif opc == '4': break
+        elif opc == '4': menu_relaciones(conn, "apps", app_id)
+        elif opc == '5': break
 
 def estadisticas_apps(conn):
     sep("="); print("📊 ESTADÍSTICAS DE APPS"); sep("=")
@@ -235,14 +240,14 @@ def listar_cuentas(conn):
     rows = conn.execute(query, params).fetchall()
     if not rows: print("\n❌ No se encontraron cuentas."); return rows
     sep("=")
-    print(f"{'N.':<4} | {'Sitio':<22} | {'Categoría':<20} | {'Email/Usuario':<25} | {'Estado':<12} | {'Plan':<10} | {'2FA'}")
+    print(f"{'N.':<4} | {'ID':<5} | {'Sitio':<20} | {'Categoría':<18} | {'Email/Usuario':<23} | {'Estado':<12} | {'Plan':<10} | {'2FA'}")
     sep()
     for i, r in enumerate(rows, 1):
-        sitio = r['sitio'][:20] + ".." if len(r['sitio']) > 22 else r['sitio']
-        cat   = (r['categoria'] or "")[:18]
-        email = (r['email_usuario'] or "—")[:23]
+        sitio = r['sitio'][:18] + ".." if len(r['sitio']) > 20 else r['sitio']
+        cat   = (r['categoria'] or "")[:16]
+        email = (r['email_usuario'] or "—")[:21]
         twofa = "✅" if r['tiene_2fa'] else "❌"
-        print(f"{i:<4} | {sitio:<22} | {cat:<20} | {email:<25} | {r['estado']:<12} | {r['plan']:<10} | {twofa}")
+        print(f"{i:<4} | {r['id']:<5} | {sitio:<20} | {cat:<18} | {email:<23} | {r['estado']:<12} | {r['plan']:<10} | {twofa}")
     sep(); print(f"Total: {len(rows)} cuentas")
     return rows
 
@@ -260,8 +265,9 @@ def ver_editar_cuenta(conn, cuenta_id):
         print(f"Tags         : {r['tags'] or '—'}")
         print(f"Notas        : {r['notas'] or '—'}")
         print(f"Registrado   : {r['fecha_reg']}")
+        mostrar_relaciones(conn, "cuentas_web", cuenta_id)
         sep()
-        print("1. ✏️ Editar | 2. 🔗 Abrir sitio | 3. 🗑️ Eliminar | 4. 🔙 Volver")
+        print("1. ✏️ Editar | 2. 🔗 Abrir sitio | 3. 🗑️ Eliminar | 4. 🔗 Relaciones | 5. 🔙 Volver")
         opc = input("> ").strip()
         if opc == '1':
             updates = {}
@@ -287,7 +293,8 @@ def ver_editar_cuenta(conn, cuenta_id):
             if input(f"⚠️ ¿Eliminar cuenta en '{r['sitio']}'? (s/n): ").lower() == 's':
                 conn.execute("DELETE FROM cuentas_web WHERE id = ?", (cuenta_id,))
                 conn.commit(); print("🗑️ Eliminada."); break
-        elif opc == '4': break
+        elif opc == '4': menu_relaciones(conn, "cuentas_web", cuenta_id)
+        elif opc == '5': break
 
 def estadisticas_cuentas(conn):
     sep("="); print("📊 ESTADÍSTICAS DE CUENTAS WEB"); sep("=")
